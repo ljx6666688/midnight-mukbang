@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -171,10 +171,32 @@
   }
   #event.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
-  /* ==================== 触屏操作（仅 .touch 时显示） ==================== */
+  /* ==================== 输入方式切换胶囊 ==================== */
+  #inputModeBtn {
+    position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
+    pointer-events: auto; cursor: pointer;
+    font-size: 12px; letter-spacing: .5px; padding: 4px 13px; border-radius: 999px;
+    color: rgba(255,255,255,.68); background: rgba(10,13,20,.62);
+    border: 1px solid rgba(255,255,255,.16);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    opacity: .6; transition: opacity .15s, color .15s, border-color .15s, box-shadow .2s;
+    user-select: none; -webkit-user-select: none; white-space: nowrap;
+  }
+  #inputModeBtn:hover { opacity: 1; color: #8fe3ff; border-color: rgba(140,215,255,.55); }
+  #inputModeBtn.notice { animation: modeNotice 1s ease-in-out 3; }
+  @keyframes modeNotice {
+    0%, 100% { opacity: .6; box-shadow: none; }
+    50% { opacity: 1; color: #ffe066; border-color: rgba(255,210,80,.8); box-shadow: 0 0 18px rgba(255,210,80,.7); }
+  }
+  body.touch #inputModeBtn { font-size: 11px; padding: 3px 11px; opacity: .45; }
+
+  /* ==================== 触屏操作（仅 .touch 且开播后显示） ==================== */
   #touchUI { display: none; }
-  body.touch #touchUI { display: block; }
+  body.touch.playing #touchUI { display: block; }
   body.touch #lockHint { display: none; }
+  #ovTouch { display: none; }
+  body.touch #ovTouch { display: inline; }
+  body.touch #ovKeys { display: none; }
 
   #joy {
     position: absolute; left: 26px; bottom: 108px; width: 132px; height: 132px;
@@ -215,14 +237,12 @@
   /* 手机上隐藏键盘提示与能力列表（信息由按钮和事件提示承担） */
   body.touch #tools .hint { display: none; }
   body.touch #abilities { display: none; }
-  body.touch #tools { bottom: 100px; right: 10px; }
   body.touch canvas { touch-action: none; }
   body.touch { -webkit-tap-highlight-color: transparent; }
 
   /* 手机上的 HUD 压缩 */
   body.touch #stats { transform: scale(.82); transform-origin: top left; left: 10px; top: 8px; }
-  body.touch #tools { transform: scale(.78); transform-origin: bottom right; right: 8px; bottom: 8px; }
-  body.touch #abilities { transform: scale(.7); transform-origin: bottom left; left: 8px; bottom: 8px; max-width: 46vw; }
+  body.touch #tools { left: 8px; right: auto; bottom: 6px; transform: scale(.72); transform-origin: bottom left; }
   body.touch #danmaku { transform: scale(.78); transform-origin: top right; right: 8px; top: 8px; width: 40vw; }
   body.touch #healthHud { width: 62vw; bottom: 16px; padding: 8px 16px; }
   body.touch #event { font-size: 22px; top: 22%; }
@@ -345,7 +365,7 @@
     <div class="tool" data-tool="lighter">2 · 打火机</div>
     <div class="tool" data-tool="bucket">3 · 水桶</div>
     <div class="tool" data-tool="broom">4 · 扫帚</div>
-    <div class="hint">左键使用 · E 拾取/吃 · Q 放下 · F 踢 · G 搬箱 · 空格 跳<br>1~4 工具 · P 画质 · L 锁定/释放鼠标 · Esc 释放 · R 重开</div>
+    <div class="hint">左键使用 · E 拾取/吃 · Q 放下 · F 踢 · G 搬箱 · 空格 跳<br>1~4 工具 · P 画质 · T 键鼠/触屏 · L 锁定/释放鼠标 · Esc 释放 · R 重开</div>
   </div>
 
   <div id="hurtOverlay"></div>
@@ -355,6 +375,7 @@
     <div class="sub"></div>
     <div class="count"></div>
   </div>
+  <div id="inputModeBtn" title="点这里切换成触屏操作">🖱 键鼠操作</div>
   <div id="touchUI">
     <div id="joy"><div id="joyKnob"></div></div>
     <div class="tbtn" id="btnUse">使用</div>
@@ -381,8 +402,11 @@
     火会烧到旁边的箱子和家具，连成一片就难救了；箱子挡路可以 <kbd>G</kbd> 搬走。<br>
     火会推高直播间热度，但也会烧毁食材、扣赔偿金，还会烧到你身上——<br>
     拎起 <kbd>水桶</kbd> 去水槽接水，泼灭纸箱和家具上的火。<br><br>
-    <kbd>W A S D</kbd> 移动　<kbd>Shift</kbd> 跑　<kbd>空格</kbd> 跳　<kbd>鼠标</kbd> 视角　<kbd>1 2 3 4</kbd> 切换工具（刀 / 打火机 / 水桶 / 扫帚）<br>
-    <kbd>左键</kbd> 使用工具　<kbd>E</kbd> 拾取 / 吃　<kbd>Q</kbd> 放下食材　<kbd>F</kbd> 踢开箱子　<kbd>G</kbd> 搬起 / 放下箱子　<kbd>R</kbd> 重开
+    <span id="ovKeys"><kbd>W A S D</kbd> 移动　<kbd>Shift</kbd> 跑　<kbd>空格</kbd> 跳　<kbd>鼠标</kbd> 视角　<kbd>1 2 3 4</kbd> 切换工具（刀 / 打火机 / 水桶 / 扫帚）<br>
+    <kbd>左键</kbd> 使用工具　<kbd>E</kbd> 拾取 / 吃　<kbd>Q</kbd> 放下食材　<kbd>F</kbd> 踢开箱子　<kbd>G</kbd> 搬起 / 放下箱子　<kbd>R</kbd> 重开<br>
+    <kbd>T</kbd> 或点顶部胶囊可在「键鼠 / 触屏」之间切换（会自动识别，一般不用管）</span>
+    <span id="ovTouch">📱 触屏操作：左下摇杆走路　滑动屏幕转视角　右侧按钮 使用 / 拿·吃 / 跳 / 换工具 / 搬箱<br>
+    横屏玩视野更宽。想用鼠标键盘的话，点顶部胶囊切回去。</span>
   </p>
   <button id="startBtn">进入直播间</button>
 </div>

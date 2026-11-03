@@ -139,36 +139,69 @@ const midCook = JSON.parse((await ev(`(() => {
     color: [+f.mat.color.r.toFixed(2), +f.mat.color.g.toFixed(2), +f.mat.color.b.toFixed(2)]
   });
 })()`)).value);
-await sleep(7000);
-const lateCook = JSON.parse((await ev(`(() => {
-  const g = window.__game, f = window.__F;
-  return JSON.stringify({
-    cook: +g.state.heldCook.toFixed(2),
-    color: [+f.mat.color.r.toFixed(2), +f.mat.color.g.toFixed(2), +f.mat.color.b.toFixed(2)]
-  });
-})()`)).value);
-check("烤制时间被延长（2.6 秒还在生/半熟）", midCook.cook < 0.4, `2.6 秒熟度 ${midCook.cook}`);
-// 颜色变化：把熟度钉在两个已知值上取样，避免受帧率影响
-await ev(`(() => { const g = window.__game; g.state.heldCook = 0; g.state.held.cook = 0; })()`);
-await sleep(400);
-const colRaw = JSON.parse((await ev(`(() => {
+check("烤制时间被延长（2.6 秒还在生/半熟）", midCook.cook > 0 && midCook.cook < 0.4, `2.6 秒熟度 ${midCook.cook}`);
+// 颜色变化：食材只在"火边"才会被重新上色，而火会烧完、会被消防车浇灭导致逻辑暂停，
+// 所以这里一边维持一团活火 + 站到火上，一边用定时器把熟度钉住，取样稳定可靠。
+const placeBox = () => ev(`(() => {
+  const g = window.__game;
+  g.state.interrupted = 0;
+  if (g.boxes.length >= g.TUNE.maxParcels) { try { g.burnBoxToAsh(g.boxes[0]); } catch (e) {} }
+  g.spawnParcel();
+  const b = g.boxes[g.boxes.length - 1];
+  window.__TB = b;
+  if (b) {
+    b.pbody.position.set(g.player.pos.x + 0.15, 0.6, g.player.pos.z - 0.85);
+    b.pbody.velocity.set(0, 0, 0);
+    b.pbody.angularVelocity.set(0, 0, 0);
+    b.pbody.wakeUp();
+  }
+  return g.boxes.length;
+})()`);
+// 点着上一个箱子，并把玩家挪到火堆正上方（烤制范围按 3D 距离算）
+const lightAndStand = () => ev(`(() => {
+  const g = window.__game, b = window.__TB;
+  if (b) g.startBurning(b);
+  const f = g.fires[g.fires.length - 1];
+  if (f && f.burn && f.burn.rig) {
+    const c = f.burn.rig.group.position;
+    g.player.pos.set(c.x, g.TUNE.eyeHeight, c.z);
+    g.player.feet = 0;
+  }
+  return g.fires.length;
+})()`);
+// 钉住熟度：每 60ms 复位一次，任何时刻取样都是稳定值
+const pinCook = (cook) => ev(`(() => {
+  const g = window.__game;
+  if (window.__pin) clearInterval(window.__pin);
+  window.__pin = setInterval(() => {
+    try {
+      g.state.interrupted = 0;
+      g.state.heldCook = ${cook};
+      if (g.state.held) g.state.held.cook = ${cook};
+    } catch (e) {}
+  }, 60);
+  return ${cook};
+})()`);
+const unpinCook = () => ev(`(() => { if (window.__pin) clearInterval(window.__pin); window.__pin = null; return 1; })()`);
+const heldColor = () => ev(`(() => {
   const c = window.__game.state.held.mat.color;
   return JSON.stringify([+c.r.toFixed(2), +c.g.toFixed(2), +c.b.toFixed(2)]);
-})()`)).value);
-const colMid = JSON.parse((await ev(`(() => {
-  const g = window.__game;
-  g.state.heldCook = 0.5; g.state.held.cook = 0.5;
-  return JSON.stringify([+g.state.held.mat.color.r.toFixed(2), +g.state.held.mat.color.g.toFixed(2), +g.state.held.mat.color.b.toFixed(2)]);
-})()`)).value);
-await sleep(350);
-const colMid2 = JSON.parse((await ev(`(() => {
-  const g = window.__game;
-  return JSON.stringify([+g.state.held.mat.color.r.toFixed(2), +g.state.held.mat.color.g.toFixed(2), +g.state.held.mat.color.b.toFixed(2)]);
-})()`)).value);
-const dR = Math.abs(colMid2[0] - colRaw[0]);
-const dG = Math.abs(colMid2[1] - colRaw[1]);
-check("颜色随熟度明显变化（生 → 半熟）", dR + dG > 0.12,
-  `生 ${colRaw} → 半熟 ${colMid2}`);
+})()`).then(r => JSON.parse(r.value));
+const sampleAt = async (cook) => {
+  await placeBox();
+  await sleep(280);            // 等一帧让箱子的可视位置同步（火焰挂架按可视位置建）
+  await lightAndStand();
+  await pinCook(cook);
+  await sleep(500);
+  const col = await heldColor();
+  await unpinCook();
+  return col;
+};
+
+const colRaw = await sampleAt(0);
+const colMid2 = await sampleAt(0.5);
+const dRaw = Math.abs(colMid2[0] - colRaw[0]) + Math.abs(colMid2[1] - colRaw[1]);
+check("颜色随熟度明显变化（生 → 半熟）", dRaw > 0.12, `生 ${colRaw} → 半熟 ${colMid2}`);
 // 烤制速度：直接核对参数（headless 帧率低会让 dt 被钳制，墙钟计时不可靠）
 const rate = JSON.parse((await ev(`JSON.stringify({ cookRate: window.__game.TUNE.cookRate })`)).value);
 check("烤制速度够慢（生→熟 ≥ 6 秒）", rate.cookRate <= 0.09, `cookRate=${rate.cookRate}/秒`);
@@ -187,27 +220,9 @@ check("生→熟→糊亮度落差明显",
   `生 ${contrast.raw} → 熟 ${contrast.cooked} → 糊 ${contrast.burnt}`);
 
 // 推到全焦：颜色应接近炭黑，且发光熄灭
-await ev(`(() => {
-  const g = window.__game;
-  if (!g.fires.length) {
-    g.spawnParcel();
-    const b = g.boxes[g.boxes.length - 1];
-    b.pbody.position.set(0, b.size.y / 2, 0.2);
-    b.pbody.velocity.set(0, 0, 0);
-    b.pbody.wakeUp();
-    g.startBurning(b);
-  }
-  // 站到最近的火旁边，确保烤制逻辑在跑
-  const f = g.fires[0];
-  if (f) {
-    const c = { x: f.burn.rig.group.position.x, z: f.burn.rig.group.position.z };
-    g.player.pos.set(c.x, g.TUNE.eyeHeight, c.z + 0.7);
-    g.player.feet = 0;
-  }
-  g.state.heldCook = 1.0;
-  g.state.held.cook = 1.0;
-})()`);
-await waitFor(`window.__game.state.held.mat.color.r < 0.2`, 20000);
+await sampleAt(1.0);                     // 先把熟度推到 1.0（同时保证火还在）
+await pinCook(1.0);
+const burntOk = await waitFor(`window.__game.state.held.mat.color.r < 0.2`, 6000);
 const burntNow = JSON.parse((await ev(`(() => {
   const f = window.__game.state.held;
   return JSON.stringify({
@@ -216,10 +231,10 @@ const burntNow = JSON.parse((await ev(`(() => {
     emissive: +f.mat.emissive.r.toFixed(2)
   });
 })()`)).value);
+await unpinCook();
 check("全焦时接近炭黑且不再发光",
-  burntNow.color[0] < 0.4 && burntNow.emissive < 0.02,
+  burntOk && burntNow.color[0] < 0.4 && burntNow.emissive < 0.02,
   `颜色 ${burntNow.color}，自发光 ${burntNow.emissive}`);
-
 // ---------- 4. 食材种类 ----------
 const kinds = JSON.parse((await ev(`(() => {
   const g = window.__game;

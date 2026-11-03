@@ -38,10 +38,67 @@
     baseFansPerDish: 55,
   };
 
-  /* 触屏设备检测：手机/平板自动切换到触屏操作 */
-  const IS_TOUCH = (typeof window !== "undefined") &&
-    (("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0) &&
-    Math.min(window.innerWidth, window.innerHeight) < 1024;
+  /* ==================== 输入方式：自动识别键鼠 / 触屏 ==================== */
+  // 光判断"有没有触屏"会误伤 Windows 触屏笔记本（这类机器不少），
+  // 所以要看"主指针是什么"：主指针是手指 → 触屏操作；主指针是鼠标/触控板 → 键鼠操作。
+  function readInputEnv() {
+    const mq = (q) => { try { return window.matchMedia(q).matches; } catch (e) { return false; } };
+    return {
+      touchPoints: navigator.maxTouchPoints || 0,
+      touchEvents: "ontouchstart" in window,
+      coarse: mq("(pointer: coarse)"),        // 主指针是粗指针（手指/笔）
+      fine: mq("(pointer: fine)"),            // 主指针是鼠标/触控板
+      hover: mq("(hover: hover)"),
+      hoverNone: mq("(hover: none)"),
+      anyCoarse: mq("(any-pointer: coarse)"), // 任意指针里含手指
+      minSide: Math.min(window.innerWidth || 9999, window.innerHeight || 9999)
+    };
+  }
+
+  function detectInputMode(env) {
+    const e = env || readInputEnv();
+    if (!(e.touchPoints > 0 || e.touchEvents)) return "desktop";   // 完全没有触屏
+    if (e.fine && e.hover) return "desktop";                       // 触屏笔记本：主指针仍是鼠标/触控板
+    if (e.coarse || e.hoverNone) return "touch";                   // 手机 / 平板：主指针是手指
+    return e.minSide < 820 ? "touch" : "desktop";                  // 兜底：小屏 + 有触屏
+  }
+
+  const INPUT_MODE_KEY = "mukbang.inputMode";
+  function savedInputMode() {                  // 玩家手动切换过就记住，下次照旧
+    try {
+      const v = localStorage.getItem(INPUT_MODE_KEY);
+      return (v === "touch" || v === "desktop") ? v : null;
+    } catch (e) { return null; }               // 无痕模式 / file:// 限制
+  }
+
+  let inputMode = savedInputMode() || detectInputMode();   // "desktop" | "touch"
+  const isTouch = () => inputMode === "touch";
+
+  function applyInputMode() {
+    const t = isTouch();
+    document.body.classList.toggle("touch", t);
+    const chip = document.getElementById("inputModeBtn");
+    if (chip) {
+      chip.textContent = t ? "📱 触屏操作" : "🖱 键鼠操作";
+      chip.title = t ? "点这里切换成键鼠操作" : "点这里切换成触屏操作";
+      chip.classList.remove("notice");
+    }
+    if (t) {
+      releasePointerLock();                    // 触屏不需要锁鼠标
+      keys.w = keys.s = keys.a = keys.d = false;
+    }
+  }
+
+  function setInputMode(mode, remember) {
+    const next = mode === "touch" ? "touch" : "desktop";
+    if (next === inputMode) return;
+    inputMode = next;
+    applyInputMode();
+    if (remember !== false) {
+      try { localStorage.setItem(INPUT_MODE_KEY, inputMode); } catch (e) { /* 存不了就算了 */ }
+    }
+    showEvent(isTouch() ? "触屏操作" : "键鼠操作", 900);
+  }
 
   const ABILITIES = [
     { key: "leg", at: 250, name: "腿力增大 · F 踢开纸箱" },
@@ -391,7 +448,7 @@
     { name: "中", ratio: 1.5, shadows: true },
     { name: "低", ratio: 1, shadows: false },
   ];
-  let qualityIdx = IS_TOUCH ? 2 : 1;
+  let qualityIdx = isTouch() ? 2 : 1;
 
   function applyQuality(idx, silent) {
     qualityIdx = (idx + QUALITY.length) % QUALITY.length;
@@ -3547,6 +3604,8 @@
     if (k === "shift") keys.shift = true;
     else keys[k] = true;
 
+    if (k === "t") { setInputMode(isTouch() ? "desktop" : "touch"); return; }   // 键鼠/触屏切换：任何时候都能用
+
     if (!state.running) return;
     if (k === " ") {
       if (player.onGround || player.coyote > 0) {
@@ -3591,14 +3650,14 @@
 
   document.addEventListener("mousemove", (e) => {
     if (!state.running || state.interrupted > 0) return;
-    if (IS_TOUCH) return;                     // 触屏由触摸事件驱动
+    if (isTouch()) return;                    // 触屏由触摸事件驱动
     if (document.pointerLockElement !== canvas) return;
     player.yaw -= e.movementX * 0.0022;
     player.pitch = clamp(player.pitch - e.movementY * 0.0022, -1.2, 1.2);
   });
 
   canvas.addEventListener("click", () => {
-    if (IS_TOUCH) return;                     // 触屏用滑动转视角，不需要锁定指针
+    if (isTouch()) return;                    // 触屏用滑动转视角，不需要锁定指针
     if (state.running && state.interrupted <= 0 && document.pointerLockElement !== canvas) {
       tryPointerLock();
     }
@@ -3607,7 +3666,7 @@
   // 请求指针锁定：无用户手势、被浏览器策略拒绝等情况会抛错或返回 rejected promise，
   // 统一吞掉，避免控制台噪音（锁不上的时候点一下画面就行）
   function tryPointerLock() {
-    if (IS_TOUCH || !canvas.requestPointerLock) return;
+    if (isTouch() || !canvas.requestPointerLock) return;
     try {
       const r = canvas.requestPointerLock();
       if (r && typeof r.catch === "function") r.catch(() => {});
@@ -3651,8 +3710,37 @@
     showEvent("工具：" + ({ knife: "刀", lighter: "打火机", bucket: "水桶", broom: "扫帚" })[state.tool], 700);
   }
 
-  if (IS_TOUCH) {
-    document.body.classList.add("touch");
+  // 触屏控件一直绑定（桌面模式下它们被 CSS 隐藏，不会误触），
+  // 这样"键鼠/触屏"可以在游戏中途随时切换。
+  {
+    applyInputMode();
+
+    // 顶部小胶囊：显示当前输入方式，点一下就在「键鼠 / 触屏」之间切换
+    const modeChip = document.getElementById("inputModeBtn");
+    if (modeChip) {
+      modeChip.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setInputMode(isTouch() ? "desktop" : "touch");
+      });
+    }
+    // 触屏笔记本/一体机：在键鼠模式下真的用手指戳屏幕，就把切换按钮闪一下提示
+    document.addEventListener("touchstart", () => {
+      if (isTouch()) return;
+      if ((navigator.maxTouchPoints || 0) <= 0) return;
+      if (!modeChip) return;
+      modeChip.classList.remove("notice");
+      void modeChip.offsetWidth;
+      modeChip.classList.add("notice");
+    }, { passive: true });
+
+    // 平板插拔键盘、手机连鼠标这类变化：没手动选过就重新自动识别一次
+    try {
+      const mql = window.matchMedia("(pointer: coarse)");
+      const onPointerChange = () => { if (!savedInputMode()) { inputMode = detectInputMode(); applyInputMode(); } };
+      if (mql.addEventListener) mql.addEventListener("change", onPointerChange);
+      else if (mql.addListener) mql.addListener(onPointerChange);
+    } catch (e) { /* 老浏览器不支持就算了 */ }
 
     // 虚拟摇杆
     const joy = document.getElementById("joy");
@@ -3872,6 +3960,7 @@
       state.running = false;
       if (document.exitPointerLock) document.exitPointerLock();
       ui.overlay.classList.remove("hidden");
+      document.body.classList.remove("playing");   // 触屏控件随开播出现、随结束收起
       ui.overlay.innerHTML =
         '<h1>被<span>烤熟</span>了</h1>' +
         '<p>粉丝 ' + Math.floor(state.fans) + " · 吃了 " + state.eaten + " 份 · 余额 " +
@@ -3943,6 +4032,7 @@
 
     ui.danmaku.innerHTML = "";
     ui.overlay.classList.add("hidden");
+    document.body.classList.add("playing");
     ui.overlay.innerHTML = "";
     state.running = true;
     setTool("knife");
@@ -4014,7 +4104,12 @@
     },
     truckX: function () { return truck.position.x; },
     keys: keys,
-    isTouch: IS_TOUCH,
+    get isTouch() { return isTouch(); },
+    inputMode: function () { return inputMode; },
+    setInputMode: function (m) { setInputMode(m, false); },
+    detectInputMode: detectInputMode,
+    readInputEnv: readInputEnv,
+    clearInputModeOverride: function () { try { localStorage.removeItem(INPUT_MODE_KEY); } catch (e) {} },
     quality: function () { return qualityIdx; },
     actionInteract: actionInteract,
     actionJump: actionJump,

@@ -26,12 +26,13 @@ const check = (n, ok, d) => { console.log(`${ok ? "OK  " : "FAIL"} ${n}${d ? "  
 
 check("识别为触屏设备", await ev(`window.__game.isTouch`) === true, "isTouch=" + (await ev(`window.__game.isTouch`)));
 check("自动降画质", await ev(`window.__game.quality()`) === 2, "quality=" + (await ev(`window.__game.quality()`)));
-check("触屏 UI 显示", await ev(`document.body.classList.contains('touch') && getComputedStyle(document.getElementById('touchUI')).display !== 'none'`));
+check("触屏模式生效（未开播时控件先收起）", await ev(`document.body.classList.contains('touch') && getComputedStyle(document.getElementById('touchUI')).display === 'none'`));
 
 // 开始游戏
 await ev(`document.getElementById('startBtn').click()`);
 await sleep(1200);
 check("游戏已开始", await ev(`window.__game.state.running`) === true);
+check("开播后摇杆按钮出现", await ev(`getComputedStyle(document.getElementById('touchUI')).display !== 'none' && document.getElementById('joy').getBoundingClientRect().width > 0`));
 
 // 摇杆：按住向上推 → 应该前进（z 变小）
 const before = await ev(`JSON.stringify({ x: +window.__game.player.pos.x.toFixed(2), z: +window.__game.player.pos.z.toFixed(2) })`);
