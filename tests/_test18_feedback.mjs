@@ -87,7 +87,7 @@ check("受击有屏幕红边反馈", hurt.overlayHit.indexOf("hit") >= 0, hurt.o
 check("受击有飘字提示", hurt.textShown.indexOf("show") >= 0, hurt.text || "(空)");
 
 // 中断横幅
-await ev(`window.__game.state.cumulativeHeat = 220`);
+await ev(`window.__game.state.cumulativeHeat = 220; window.__game.forceFirefighter();`);
 await sleep(1200);
 const banner = JSON.parse((await ev(`(() => {
   const el = document.getElementById('interruptBanner');

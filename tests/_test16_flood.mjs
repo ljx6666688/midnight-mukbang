@@ -45,7 +45,7 @@ await ev(`(() => {
   g.player.feet = 0; g.player.yaw = 0;
   g.startBurning(b);
   window.__B = b;
-  g.state.cumulativeHeat = 200;   // 直接触发
+  g.forceFirefighter();            // 直接触发消防车事件（新逻辑下热度不再是唯一条件）
 })()`);
 await waitFor(`window.__game.floodLevel() > 0.05`, 25000);
 await sleep(500);

@@ -1,4 +1,4 @@
-﻿/* 深夜吃播 · 快递开箱 —— 第一人称 3D 小游戏（Three.js r149） */
+/* 深夜吃播 · 快递开箱 —— 第一人称 3D 小游戏（Three.js r149） */
 (function () {
   "use strict";
 
@@ -7,7 +7,7 @@
     boxBurnTime: 16,          // 纸箱从点燃到碳化熄灭的秒数
     furnBurnTime: 26,         // 家具上的火自行熄灭的秒数（家具不会坏）
     heatPerFirePerSec: 2,     // 每团火每秒贡献的热度
-    maxHeatFires: 4,          // 计入热度的最大火焰数
+    maxHeatFires: 6,          // 计入热度的最大火焰数（火越多热度涨得越快 → 消防车来得越快）
     fansPerHeat: 0.55,        // 每秒热度换算成粉丝的比率（再乘吃相倍率）
     payoutPerFirePerSec: 1.2, // 每团火每秒的赔偿金
     fireDamagePerSec: 6,      // 贴着火每秒掉血
@@ -21,8 +21,11 @@
     floorFireTime: 12,        // 地面火持续时间
     floorFireRadius: 1.05,    // 地面火的燃烧半径
     floorIgnitePerSec: 0.75,  // 箱子燃到四周/整体后每秒点燃地板的概率
-    firefighterHeat: 160,     // 累计热度到多少消防员破门
+    firefighterHeat: 260,     // 累计热度到多少消防员破门（两队火连续烧半分钟才会到）
+    firefighterMinFire: 18,   // 火至少连烧这么多秒，才可能有人报警
     complaintHeat: 110,       // 邻居投诉阈值
+    alarmHeat: 200,           // 邻居正式报警（消防车警告线）
+    reportHeat: 42,           // 观众举报一次带来的热度（不再直接召唤消防车）
     cutTime: 1.4,             // 切箱所需秒数
     fillTime: 1.1,            // 接水所需秒数
     waterRadius: 2.8,         // 泼水灭火半径
@@ -109,20 +112,119 @@
     { key: "nextHouse", at: 5000, name: "换房 · 本关完成" },
   ];
 
-  const DANMAKU = [
-    "这快递是粉丝寄的吧，稳",
-    "大哥别烧啊，食材都焦了",
-    "主播这火开得有点猛",
-    "哈哈哈哈这波赔惨了",
-    "烤好了吗？我等半天了",
-    "纸箱当炭火，行家",
-    "先接水吧，看得我心慌",
-    "这厨房还能要吗",
-    "下播吧主播，房子要没了",
-    "刚来，怎么着火了",
-    "吃播界的天花板（物理）",
-    "白米饭配焦味，绝了",
-  ];
+  /* 弹幕池：按场景分组，只播"符合当前局面"的话——不然没着火却一直念叨着火了，很出戏 */
+  const DANMAKU = {
+    // 什么都没发生：闲聊、催更、吐槽
+    idle: [
+      "刚进来，今晚吃什么",
+      "主播这快递堆得跟小卖部一样",
+      "先拆个箱子看看呗",
+      "镜头能拉近点吗，看不清",
+      "蹲一个开箱",
+      "这灯也太黄了，我眼睛疼",
+      "隔壁吃播都上菜了，你还在拆快递",
+      "关注了，等你烤好",
+      "这桌面挺干净啊",
+      "有肉吗有肉吗",
+      "主播手速可以啊",
+      "别光拆不吃啊",
+      "晚上十二点看这个，罪恶感拉满",
+      "我在减脂，就陪你看看",
+      "这背景是自己搭的？还挺像那么回事",
+      "话说你一顿能吃几斤",
+      "今天不翻车就算成功",
+      "BGM 能小点声吗",
+      "刚下班，陪你蹲一会儿",
+      "主播你怎么不说话的",
+    ],
+    // 刚拆箱
+    box: [
+      "开箱开箱！",
+      "就这？盒子比里面东西还大",
+      "这包装也太实在了",
+      "箱子别扔啊，等会儿还得靠它烤",
+      "粉丝寄的？用心了",
+    ],
+    // 生食材在手 / 在桌上
+    raw: [
+      "生的也能吃吗大哥",
+      "先烤烤吧，别直接吃",
+      "这颜色看着不太新鲜啊",
+      "洗了没啊就上手",
+    ],
+    // 正在火边烤
+    cooking: [
+      "烤上了烤上了",
+      "闻着味儿了，香",
+      "别走神，要糊了",
+      "翻个面啊",
+      "这火候可以",
+      "我隔着屏幕都饿了",
+    ],
+    // 烤得正好
+    done: [
+      "这个颜色正好，快吃",
+      "完美！",
+      "趁热吃趁热吃",
+      "这波可以，先夸了",
+    ],
+    // 只有一小团火（还算正常）
+    fire: [
+      "哎，起火了",
+      "这不比烤肉架好使",
+      "小心点，火苗歪了",
+      "纸箱当炭火，行家",
+      "火别太大啊",
+      "火苗蹿起来了",
+    ],
+    // 火大了：多团火 / 家具 / 地面在烧
+    bigFire: [
+      "完了完了，连起来了",
+      "下播吧主播，房子要没了",
+      "这厨房还能要吗",
+      "快接水啊！！",
+      "看得我手心冒汗",
+      "报警了报警了",
+      "这火比刚才那道菜还旺",
+      "我劝你现在就跑",
+    ],
+    // 有东西糊了
+    burnt: [
+      "糊了糊了，黑了",
+      "这味道……",
+      "炭化了兄弟",
+      "别吃啊，那已经算木炭了",
+    ],
+    // 刚扑灭
+    out: [
+      "终于灭了，我心脏受不了",
+      "虚惊一场",
+      "这波损失有点大",
+      "泼水的姿势很帅",
+      "打扫一下吧，满地灰",
+    ],
+    // 屋里灌水
+    flood: [
+      "水漫金山了",
+      "这地板泡汤了",
+      "可以顺路游个泳",
+      "拖鞋都漂起来了",
+    ],
+    // 地上有灰
+    ash: [
+      "地上全是灰，扫扫呗",
+      "扫灰 +10086",
+      "这灰要是不扫，明天还得吃一遍",
+      "这灰攒得都能种花了",
+    ],
+    // 血量告急
+    lowHp: [
+      "主播脸色不对啊",
+      "别站火里了！",
+      "要凉要凉",
+      "先撤，别硬撑",
+    ],
+  };
 
   /* ==================== 基础工具 ==================== */
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -1489,6 +1591,11 @@
     interrupted: 0,
     reported: false,
     complaintShown: false,
+    alarmShown: false,
+    fireActiveTime: 0,      // 这一局火焰累计燃烧时长（用来判断"火是不是烧久了"）
+    fireOutAt: -99,         // 上一次火全灭的时间点（用来播"终于灭了"）
+    lastFireCount: 0,
+    chatHistory: [],        // 最近播过的弹幕，避免复读
     legCooldown: 0,
     gameOver: false,
     lastHurt: -99,
@@ -1868,7 +1975,7 @@
     stopBurning(box);
     spawnAshPile(pos.x, pos.z, size);
     box.ash = true;
-    showDanmaku("🔥 纸箱烧成灰了");
+    showDanmakuEvery("ashed", "🔥 纸箱烧成灰了", 10);
   }
   /* ==================== 快递箱 ==================== */
   const boxGeoBase = new THREE.BoxGeometry(1, 1, 1);
@@ -1972,7 +2079,7 @@
     box.pbody = pbody;
 
     boxes.push(box);
-    showDanmaku("📦 有新快递到了");
+    showDanmakuEvery("parcel", "📦 有新快递到了", 7);
   }
 
   function syncBoxFromBody(b) {
@@ -2715,6 +2822,10 @@
     state.heldCook = 0;
     showEvent("吃掉" + zone + "的" + f.type.name + " · 粉丝 +" + gain, 1400);
     showDanmaku("主播吃了" + zone + "的" + f.type.name + "！");
+    // 观众跟着反应一句，比单纯报菜名像真的
+    if (mult >= 1.7) showDanmaku("【观众】" + pick(DANMAKU.done));
+    else if (zone === "糊了") showDanmaku("【观众】" + pick(DANMAKU.burnt));
+    else showDanmaku("【观众】" + pick(DANMAKU.raw));
   }
 
   function tryCut(dt) {
@@ -2746,6 +2857,7 @@
     }
     showEvent("开箱成功！" + food.type.name, 900);
     showDanmaku("拆箱！是" + food.type.name);
+    showDanmaku("【观众】" + pick(DANMAKU.box));
   }
 
   function useTool() {
@@ -2798,7 +2910,10 @@
       requestAnimationFrame(anim);
     };
     anim();
-    if (count) showEvent("灭了 " + count + " 处火", 900);
+    if (count) {
+      showEvent("灭了 " + count + " 处火", 900);
+      showDanmaku(fires.length === 0 ? "【观众】好！全灭了" : "【观众】灭了 " + count + " 处，继续继续");
+    }
   }
 
   function tryFillWater(dt) {
@@ -2955,7 +3070,7 @@
           const nz = item.group.position.z + Math.sin(a) * r;
           if (Math.abs(nx) < ROOM.half - 0.4 && Math.abs(nz) < ROOM.half - 0.4) {
             const ff = spawnFloorFire(nx, nz);
-            if (ff) showDanmaku("🔥 火爬上地板了！");
+            if (ff) showDanmakuEvery("floorfire", "🔥 火爬上地板了！", 14);
           }
         }
       } else {
@@ -2999,7 +3114,7 @@
       if (cands.length) {
         const target = pick(cands);
         startBurning(target);
-        showDanmaku("火蔓延到" + (target.kind === "box" ? "旁边的快递箱" : target.label) + "了！");
+        showDanmakuEvery("spread", "火蔓延到" + (target.kind === "box" ? "旁边的快递箱" : target.label) + "了！", 9);
       }
     }
 
@@ -3008,6 +3123,7 @@
     if (fireCount > 0) {
       const heatGain = TUNE.heatPerFirePerSec * fireCount;
       state.cumulativeHeat += heatGain * dt;
+      state.fireActiveTime += dt;
       state.heat = clamp(state.heat + heatGain * 1.6 * dt, 0, 100);
       const eatMult = state.abilities.eat ? 1.5 : 1;
       state.fans += heatGain * TUNE.fansPerHeat * dt * eatMult;
@@ -3102,7 +3218,7 @@
       }
     }
 
-    // 邻居投诉
+    // 邻居投诉 → 报警 → 消防车：三级递进，且必须"火真的大了"才会有人上门
     if (state.cumulativeHeat > TUNE.complaintHeat && !state.complaintShown) {
       state.complaintShown = true;
       showEvent("邻居开始拍墙了！", 1800);
@@ -3110,8 +3226,18 @@
     }
     if (state.cumulativeHeat < TUNE.complaintHeat * 0.6) state.complaintShown = false;
 
-    // 消防员破门
-    if (state.cumulativeHeat >= TUNE.firefighterHeat && !state.reported) {
+    if (state.cumulativeHeat >= TUNE.alarmHeat && !state.alarmShown) {
+      state.alarmShown = true;
+      showEvent("邻居报警了！", 1800);
+      showDanmaku("【系统】邻居报警：再烧下去消防车就要来了");
+    }
+    if (state.cumulativeHeat < TUNE.alarmHeat * 0.6) state.alarmShown = false;
+
+    // 消防员破门：热度要够高 + 火得烧够久 + 现场确实失控（多团火 / 家具 / 地面火）
+    const sceneOutOfControl =
+      fires.length >= 3 || fires.some(f => f.kind === "furniture" || f.kind === "floor");
+    if (state.cumulativeHeat >= TUNE.firefighterHeat && !state.reported &&
+        state.fireActiveTime >= TUNE.firefighterMinFire && sceneOutOfControl) {
       state.reported = true;
       triggerFirefighter();
     }
@@ -3218,6 +3344,7 @@
       6.5
     );
     showDanmaku("【系统】直播间被强制中断");
+    showDanmaku("【观众】卧槽，消防车真的来了");
     showDanmaku("【热度】事故标签让粉丝暴涨 +" + bonus);
     setTimeout(() => { state.reported = false; }, 9000);
   }
@@ -3225,6 +3352,15 @@
   /* ==================== 观众弹幕（本地模拟联机博弈） ==================== */
   let danmakuTimer = 0;
   let trollCooldown = 0;
+
+  /* 观众昵称 + 礼物：加个名字，弹幕立刻从"旁白"变成"一群人在看" */
+  const CHAT_NAMES = [
+    "夜宵星人", "不吃香菜", "卡路里管理员", "饿了别看我", "碳水战士",
+    "养生失败", "减肥第3天", "室友在睡觉", "打工人小李", "干饭王",
+    "看着就香", "在线催更", "隔壁老王", "深夜胃疼", "周一还要上班",
+    "只想看开箱", "碗已经端好了", "键盘美食家"
+  ];
+  const CHAT_GIFTS = ["烤肠 ×1", "热狗 ×2", "可乐 ×1", "小蛋糕 ×1", "小心心 ×3", "夜宵红包"];
 
   function showDanmaku(text) {
     const d = document.createElement("div");
@@ -3236,25 +3372,117 @@
     setTimeout(() => { if (d.parentNode) d.parentNode.removeChild(d); }, 9000);
   }
 
+  /* 同一条事件提示别刷屏：同类消息在 minGap 秒内只播一次 */
+  const danmakuGapAt = Object.create(null);
+  function showDanmakuEvery(key, text, minGap) {
+    const t = state.time;
+    if (danmakuGapAt[key] !== undefined && t - danmakuGapAt[key] < minGap) return;
+    danmakuGapAt[key] = t;
+    showDanmaku(text);
+  }
+
+  /* 从某个分类里挑一句没刚说过的 */
+  function chatFrom(cat) {
+    const pool = DANMAKU[cat];
+    if (!pool || !pool.length) return false;
+    const recent = state.chatHistory;
+    let line = pick(pool);
+    for (let i = 0; i < 6 && recent.indexOf(line) >= 0 && recent.length < pool.length; i++) line = pick(pool);
+    state.chatHistory.push(line);
+    if (state.chatHistory.length > 10) state.chatHistory.shift();
+    showDanmaku(pick(CHAT_NAMES) + "：" + line);
+    return true;
+  }
+
+  /* 当前局面下，观众会聊什么 —— 返回 [{cat, w}] */
+  function danmakuWeights() {
+    const out = [];
+    const fireCount = fires.length;
+    const serious = fires.some(f => f.kind === "floor" || f.kind === "furniture");
+    const burning = fires.length > 0;
+    const sinceOut = state.time - state.fireOutAt;
+    const held = state.held;
+    const heldCook = held ? state.heldCook : 0;
+    const someBurnt = (held && heldCook > 0.8) || foods.some(f => f.cook > 0.8 && f.cook <= 1.2);
+    const someHot = (held && heldCook > 0.05 && heldCook <= 0.8) || foods.some(f => f.cook > 0.05 && f.cook <= 0.8);
+    const someReady = (held && heldCook >= 0.3 && heldCook <= 0.8) || foods.some(f => f.cook >= 0.3 && f.cook <= 0.8);
+    const rawFood = foods.filter(f => f.cook <= 0.05).length + (held && heldCook <= 0.05 ? 1 : 0);
+
+    if (state.hp < 35) out.push({ cat: "lowHp", w: 3 });
+    if (flood.level > 0.08) out.push({ cat: "flood", w: 3 });
+
+    if (!burning) {
+      // 刚灭完火：先播两句"终于灭了"，再回到闲聊
+      if (state.fireOutAt >= 0 && sinceOut < 22) out.push({ cat: "out", w: 6 });
+      if (someBurnt) out.push({ cat: "burnt", w: 4 });
+      else if (someReady) out.push({ cat: "done", w: 4 });
+      else if (rawFood > 0) out.push({ cat: "raw", w: 1.5 });
+      if (ashPiles.length > 0) out.push({ cat: "ash", w: 1.5 });
+      out.push({ cat: "idle", w: 8 });
+    } else {
+      // 有火：按火势大小选语气
+      if (fireCount >= 3 || serious) out.push({ cat: "bigFire", w: 9 });
+      else out.push({ cat: "fire", w: 6 });
+      if (someHot) out.push({ cat: "cooking", w: 4 });
+      if (someReady) out.push({ cat: "done", w: 2 });
+      if (someBurnt) out.push({ cat: "burnt", w: 3 });
+      if (fireCount === 1 && !serious) out.push({ cat: "idle", w: 1.5 });   // 小火时也能聊点别的
+    }
+    return out;
+  }
+
+  function pickDanmakuCat() {
+    const list = danmakuWeights();
+    let total = 0;
+    for (const it of list) total += it.w;
+    if (total <= 0) return "idle";
+    let r = Math.random() * total;
+    for (const it of list) {
+      r -= it.w;
+      if (r <= 0) return it.cat;
+    }
+    return list[list.length - 1].cat;
+  }
+
   function updateDanmaku(dt) {
     danmakuTimer -= dt;
     trollCooldown -= dt;
-    if (danmakuTimer > 0) return;
-    danmakuTimer = rand(2.2, 4.2);
-    showDanmaku(pick(DANMAKU));
-    if (fires.length === 0 || Math.random() >= 0.22 || trollCooldown > 0) return;
 
-    trollCooldown = 22;
-    if (Math.random() < 0.55) {
+    // 火全灭的那一刻，先给一句"终于灭了"
+    if (state.lastFireCount > 0 && fires.length === 0) {
+      state.fireOutAt = state.time;
+      if (!chatFrom("out")) chatFrom("idle");
+      danmakuTimer = Math.max(danmakuTimer, 1.6);
+    }
+    state.lastFireCount = fires.length;
+
+    if (danmakuTimer > 0) return;
+    danmakuTimer = rand(1.8, 3.6);   // 真直播间的弹幕是一直在滚的，别太稀疏
+    // 偶尔来个礼物，气氛才像真直播间
+    if (Math.random() < 0.08) {
+      showDanmaku("【礼物】" + pick(CHAT_NAMES) + " 送出 " + pick(CHAT_GIFTS) + " ❤");
+      state.money += 15;
+    } else {
+      chatFrom(pickDanmakuCat());
+    }
+
+    // 观众"搞事情"：火在场时才可能发生，而且不会直接招来消防车
+    if (fires.length === 0 || Math.random() >= 0.18 || trollCooldown > 0) return;
+    trollCooldown = 26;
+    const roll = Math.random();
+    if (roll < 0.62) {
       const item = pick(fires);
-      if (item) {
+      if (item && item.burn) {
         item.burn.carbon = Math.max(0, item.burn.carbon - 0.28);
         item.burn.flicker += 2;
         showDanmaku("【观众】大哥给你添柴了 🔥");
       }
-    } else if (Math.random() < 0.45) {
-      showDanmaku("【观众】有人举报了你");
-      state.cumulativeHeat = Math.max(state.cumulativeHeat, TUNE.firefighterHeat);
+    } else if (roll < 0.86) {
+      // 举报只是"把热度推高一点"，烧大了才会有人上门
+      const before = state.cumulativeHeat;
+      state.cumulativeHeat += TUNE.reportHeat;
+      state.heat = clamp(state.heat + 14, 0, 100);
+      showDanmaku("【观众】有人举报了你，热度 +" + Math.round(state.cumulativeHeat - before));
     } else {
       showDanmaku("【观众】举报不成立，对方被扣分反噬");
       state.money += 25;
@@ -4004,6 +4232,14 @@
     state.interrupted = 0;
     state.reported = false;
     state.complaintShown = false;
+    state.alarmShown = false;
+    state.fireActiveTime = 0;
+    state.fireOutAt = -99;
+    state.lastFireCount = 0;
+    state.chatHistory = [];
+    for (const k in danmakuGapAt) delete danmakuGapAt[k];
+    danmakuTimer = 0;
+    trollCooldown = 14;      // 开播先安静一会儿，别一上来就搞事
     state.gameOver = false;
     state.legCooldown = 0;
     state.lastHurt = -99;
@@ -4116,6 +4352,12 @@
     actionCycleTool: actionCycleTool,
     truck: truck,
     truckPhase: function () { return truckState.phase; },
+    DANMAKU_POOLS: DANMAKU,
+    pickDanmakuCat: pickDanmakuCat,
+    danmakuWeights: danmakuWeights,
+    fireActiveTime: function () { return state.fireActiveTime; },
+    chatHistory: function () { return state.chatHistory.slice(); },
+    forceFirefighter: function () { state.reported = true; triggerFirefighter(); },
     windowWallInfo: function () { return windowWallGroup ? windowWallGroup.children.length : 0; },
   };
 
