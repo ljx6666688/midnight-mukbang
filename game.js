@@ -38,6 +38,11 @@
     baseFansPerDish: 55,
   };
 
+  /* 触屏设备检测：手机/平板自动切换到触屏操作 */
+  const IS_TOUCH = (typeof window !== "undefined") &&
+    (("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0) &&
+    Math.min(window.innerWidth, window.innerHeight) < 1024;
+
   const ABILITIES = [
     { key: "leg", at: 250, name: "腿力增大 · F 踢开纸箱" },
     { key: "water2", at: 600, name: "水桶加倍 · 一桶水泼两道" },
@@ -386,7 +391,7 @@
     { name: "中", ratio: 1.5, shadows: true },
     { name: "低", ratio: 1, shadows: false },
   ];
-  let qualityIdx = 1;
+  let qualityIdx = IS_TOUCH ? 2 : 1;
 
   function applyQuality(idx, silent) {
     qualityIdx = (idx + QUALITY.length) % QUALITY.length;
@@ -3586,12 +3591,14 @@
 
   document.addEventListener("mousemove", (e) => {
     if (!state.running || state.interrupted > 0) return;
+    if (IS_TOUCH) return;                     // 触屏由触摸事件驱动
     if (document.pointerLockElement !== canvas) return;
     player.yaw -= e.movementX * 0.0022;
     player.pitch = clamp(player.pitch - e.movementY * 0.0022, -1.2, 1.2);
   });
 
   canvas.addEventListener("click", () => {
+    if (IS_TOUCH) return;                     // 触屏用滑动转视角，不需要锁定指针
     if (state.running && state.interrupted <= 0 && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock();
     }
@@ -3610,6 +3617,164 @@
     }
   });
 
+  /* ==================== 触屏操作 ==================== */
+  function actionInteract() {
+    if (!state.running || state.interrupted > 0) return;
+    if (state.held) eatHeld();
+    else if (focus && focus.kind === "food") pickFood();
+    else if (focus && focus.isSink) tryFillWater(9);
+  }
+
+  function actionJump() {
+    if (!state.running || state.interrupted > 0) return;
+    if (player.onGround || player.coyote > 0) {
+      player.vy = TUNE.jumpSpeed;
+      player.onGround = false;
+      player.coyote = 0;
+    }
+  }
+
+  function actionCycleTool() {
+    const order = ["knife", "lighter", "bucket", "broom"];
+    const i = order.indexOf(state.tool);
+    setTool(order[(i + 1) % order.length]);
+    showEvent("工具：" + ({ knife: "刀", lighter: "打火机", bucket: "水桶", broom: "扫帚" })[state.tool], 700);
+  }
+
+  if (IS_TOUCH) {
+    document.body.classList.add("touch");
+
+    // 虚拟摇杆
+    const joy = document.getElementById("joy");
+    const knob = document.getElementById("joyKnob");
+    let joyId = null;
+    const JOY_R = 52;
+
+    function setJoy(dx, dy) {
+      const len = Math.hypot(dx, dy);
+      const k = len > JOY_R ? JOY_R / len : 1;
+      const kx = dx * k;
+      const ky = dy * k;
+      knob.style.transform = "translate(" + kx + "px," + ky + "px)";
+      const nx = kx / JOY_R;
+      const ny = ky / JOY_R;
+      keys.w = ny < -0.28;
+      keys.s = ny > 0.28;
+      keys.a = nx < -0.28;
+      keys.d = nx > 0.28;
+    }
+
+    joy.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      joyId = t.identifier;
+      const r = joy.getBoundingClientRect();
+      setJoy(t.clientX - (r.left + r.width / 2), t.clientY - (r.top + r.height / 2));
+    }, { passive: false });
+
+    joy.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      for (const t of e.changedTouches) {
+        if (t.identifier !== joyId) continue;
+        const r = joy.getBoundingClientRect();
+        setJoy(t.clientX - (r.left + r.width / 2), t.clientY - (r.top + r.height / 2));
+      }
+    }, { passive: false });
+
+    const endJoy = (e) => {
+      for (const t of e.changedTouches) {
+        if (t.identifier !== joyId) continue;
+        joyId = null;
+        knob.style.transform = "translate(0,0)";
+        keys.w = keys.s = keys.a = keys.d = false;
+      }
+    };
+    joy.addEventListener("touchend", endJoy);
+    joy.addEventListener("touchcancel", endJoy);
+
+    // 屏幕滑动转视角（避开摇杆与按钮区域）
+    let lookId = null;
+    let lastX = 0;
+    let lastY = 0;
+    canvas.addEventListener("touchstart", (e) => {
+      for (const t of e.changedTouches) {
+        if (lookId !== null) break;
+        lookId = t.identifier;
+        lastX = t.clientX;
+        lastY = t.clientY;
+      }
+    }, { passive: true });
+
+    canvas.addEventListener("touchmove", (e) => {
+      if (lookId === null || !state.running || state.interrupted > 0) return;
+      for (const t of e.changedTouches) {
+        if (t.identifier !== lookId) continue;
+        const dx = t.clientX - lastX;
+        const dy = t.clientY - lastY;
+        lastX = t.clientX;
+        lastY = t.clientY;
+        player.yaw -= dx * 0.005;
+        player.pitch = clamp(player.pitch - dy * 0.005, -1.2, 1.2);
+      }
+      e.preventDefault();
+    }, { passive: false });
+
+    const endLook = (e) => {
+      for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null;
+    };
+    canvas.addEventListener("touchend", endLook);
+    canvas.addEventListener("touchcancel", endLook);
+
+    // 动作按钮
+    function bindBtn(id, onDown, onUp) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.add("pressed");
+        if (onDown) onDown();
+      }, { passive: false });
+      const up = (e) => {
+        e.preventDefault();
+        el.classList.remove("pressed");
+        if (onUp) onUp();
+      };
+      el.addEventListener("touchend", up, { passive: false });
+      el.addEventListener("touchcancel", up, { passive: false });
+    }
+
+    // 「使用」按住=持续切箱/点火
+    bindBtn("btnUse",
+      () => {
+        if (!state.running || state.interrupted > 0) return;
+        mouseDown = true;
+        useTool();
+      },
+      () => { mouseDown = false; });
+    bindBtn("btnE", () => actionInteract());
+    bindBtn("btnJump", () => actionJump());
+    bindBtn("btnTool", () => actionCycleTool());
+    bindBtn("btnQ", () => { if (state.running) dropHeld(); });
+    bindBtn("btnF", () => { if (state.running) kick(); });
+    bindBtn("btnG", () => { if (state.running) toggleCarry(); });
+
+    // 竖屏提示
+    const rotateHint = document.getElementById("rotateHint");
+    const checkOrientation = () => {
+      const portrait = window.innerHeight > window.innerWidth;
+      if (rotateHint) rotateHint.classList.toggle("show", portrait && state.running);
+    };
+    window.addEventListener("resize", checkOrientation);
+    window.addEventListener("orientationchange", () => setTimeout(checkOrientation, 220));
+    const startBtnEl = document.getElementById("startBtn");
+    if (startBtnEl) startBtnEl.addEventListener("click", () => setTimeout(checkOrientation, 500));
+    const origRestart = restart;
+    restart = function () {
+      origRestart();
+      setTimeout(checkOrientation, 400);
+    };
+  }
   addEventListener("resize", () => {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
@@ -3773,7 +3938,7 @@
     setTool("knife");
     checkAbilities();
     showEvent("开播！", 1200);
-    if (canvas.requestPointerLock) canvas.requestPointerLock();
+    if (!IS_TOUCH && canvas.requestPointerLock) canvas.requestPointerLock();   // 触屏不需要指针锁定
   }
 
   document.getElementById("startBtn").onclick = restart;
@@ -3838,6 +4003,12 @@
       };
     },
     truckX: function () { return truck.position.x; },
+    keys: keys,
+    isTouch: IS_TOUCH,
+    quality: function () { return qualityIdx; },
+    actionInteract: actionInteract,
+    actionJump: actionJump,
+    actionCycleTool: actionCycleTool,
     truck: truck,
     truckPhase: function () { return truckState.phase; },
     windowWallInfo: function () { return windowWallGroup ? windowWallGroup.children.length : 0; },

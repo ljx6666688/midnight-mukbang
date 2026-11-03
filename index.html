@@ -171,6 +171,72 @@
   }
   #event.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
+  /* ==================== 触屏操作（仅 .touch 时显示） ==================== */
+  #touchUI { display: none; }
+  body.touch #touchUI { display: block; }
+  body.touch #lockHint { display: none; }
+
+  #joy {
+    position: absolute; left: 26px; bottom: 108px; width: 132px; height: 132px;
+    border-radius: 50%; background: rgba(255,255,255,.08);
+    border: 2px solid rgba(255,255,255,.22);
+    box-shadow: inset 0 0 24px rgba(0,0,0,.35);
+    pointer-events: auto; touch-action: none;
+  }
+  #joyKnob {
+    position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+    border-radius: 50%; background: rgba(140,215,255,.55);
+    border: 2px solid rgba(255,255,255,.5);
+    box-shadow: 0 4px 14px rgba(0,0,0,.45);
+    transition: transform .04s linear;
+  }
+
+  .tbtn {
+    position: absolute; border-radius: 50%; pointer-events: auto; touch-action: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; letter-spacing: .5px;
+    color: #eaf6ff; background: rgba(18,26,40,.62);
+    border: 1.5px solid rgba(140,215,255,.45);
+    box-shadow: 0 4px 14px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.18);
+    user-select: none; -webkit-user-select: none;
+  }
+  .tbtn:active, .tbtn.pressed { background: rgba(90,190,255,.55); transform: scale(.94); }
+  .tbtn.small { font-size: 12.5px; }
+
+  /* 右侧动作区 */
+  #btnUse { right: 28px; bottom: 118px; width: 96px; height: 96px; font-size: 17px; }
+  #btnE { right: 138px; bottom: 156px; width: 76px; height: 76px; }
+  #btnJump { right: 138px; bottom: 66px; width: 76px; height: 76px; }
+  #btnTool { right: 30px; bottom: 228px; width: 66px; height: 66px; }
+  #btnQ { right: 250px; bottom: 112px; width: 58px; height: 58px; }
+  #btnF { right: 250px; bottom: 192px; width: 58px; height: 58px; }
+  #btnG { right: 250px; bottom: 32px; width: 58px; height: 58px; }
+
+  /* 手机上隐藏键盘提示与能力列表（信息由按钮和事件提示承担） */
+  body.touch #tools .hint { display: none; }
+  body.touch #abilities { display: none; }
+  body.touch #tools { bottom: 100px; right: 10px; }
+  body.touch canvas { touch-action: none; }
+  body.touch { -webkit-tap-highlight-color: transparent; }
+
+  /* 手机上的 HUD 压缩 */
+  body.touch #stats { transform: scale(.82); transform-origin: top left; left: 10px; top: 8px; }
+  body.touch #tools { transform: scale(.78); transform-origin: bottom right; right: 8px; bottom: 8px; }
+  body.touch #abilities { transform: scale(.7); transform-origin: bottom left; left: 8px; bottom: 8px; max-width: 46vw; }
+  body.touch #danmaku { transform: scale(.78); transform-origin: top right; right: 8px; top: 8px; width: 40vw; }
+  body.touch #healthHud { width: 62vw; bottom: 16px; padding: 8px 16px; }
+  body.touch #event { font-size: 22px; top: 22%; }
+  body.touch #interruptBanner { padding: 14px 22px; min-width: 0; width: 84vw; }
+  body.touch #interruptBanner .title { font-size: 22px; }
+  body.touch #overlay h1 { font-size: 24px; }
+  body.touch #overlay p { font-size: 12px; line-height: 1.7; }
+  /* 竖屏提示 */
+  #rotateHint {
+    display: none; position: fixed; inset: 0; z-index: 20; pointer-events: none;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(4,6,10,.86); color: #cfe8ff; font-size: 16px; line-height: 2;
+  }
+  body.touch #rotateHint.show { display: flex; }
   /* ---------- 受击反馈 ---------- */
   #hurtOverlay {
     position: absolute; inset: 0; pointer-events: none; opacity: 0;
@@ -289,6 +355,17 @@
     <div class="sub"></div>
     <div class="count"></div>
   </div>
+  <div id="touchUI">
+    <div id="joy"><div id="joyKnob"></div></div>
+    <div class="tbtn" id="btnUse">使用</div>
+    <div class="tbtn" id="btnE">拿/吃</div>
+    <div class="tbtn" id="btnJump">跳</div>
+    <div class="tbtn small" id="btnTool">换工具</div>
+    <div class="tbtn small" id="btnQ">放下</div>
+    <div class="tbtn small" id="btnF">踢</div>
+    <div class="tbtn small" id="btnG">搬箱</div>
+  </div>
+  <div id="rotateHint">请把手机横过来玩<br><span style="font-size:13px;opacity:.7">横屏视野更宽，操作也更顺手</span></div>
   <div id="prompt"></div>
   <div id="lockHint" style="position:absolute;left:50%;bottom:96px;transform:translateX(-50%);font-size:12.5px;letter-spacing:.5px;color:rgba(255,210,120,.9);text-shadow:0 1px 4px #000;pointer-events:none;">鼠标未锁定</div>
   <div id="event"></div>
