@@ -1,4 +1,4 @@
-/* 深夜吃播 · 快递开箱 —— 第一人称 3D 小游戏（Three.js r149） */
+﻿/* 深夜吃播 · 快递开箱 —— 第一人称 3D 小游戏（Three.js r149） */
 (function () {
   "use strict";
 
@@ -1596,6 +1596,21 @@
     fireOutAt: -99,         // 上一次火全灭的时间点（用来播"终于灭了"）
     lastFireCount: 0,
     chatHistory: [],        // 最近播过的弹幕，避免复读
+    /* 解说引擎用的"事迹"统计：玩家做过什么，观众才有的聊 */
+    stats: {
+      kicked: 0,            // 踢箱子次数
+      eatenRaw: 0,          // 吃了生的
+      eatenGood: 0,         // 吃了火候正好的
+      eatenBurnt: 0,        // 吃了糊的
+      burnedBoxes: 0,       // 箱子烧成灰的数量
+      swept: 0,             // 扫灰次数
+      watered: 0,           // 泼掉的火焰数
+      steppedInFire: 0,     // 站进火里的次数
+      dropped: 0            // 扔掉食材次数
+    },
+    burnSeconds: 0,         // 玩家被火烧的累计秒数
+    inFireNow: false,
+    saidAt: {},             // 解说台词冷却：同一件事说过的时刻
     legCooldown: 0,
     gameOver: false,
     lastHurt: -99,
@@ -1975,6 +1990,7 @@
     stopBurning(box);
     spawnAshPile(pos.x, pos.z, size);
     box.ash = true;
+    state.stats.burnedBoxes++;
     showDanmakuEvery("ashed", "🔥 纸箱烧成灰了", 10);
   }
   /* ==================== 快递箱 ==================== */
@@ -2789,6 +2805,7 @@
     const idx = ashPiles.indexOf(best);
     if (idx >= 0) ashPiles.splice(idx, 1);
     state.money += 10;
+    state.stats.swept++;
     showEvent("扫干净了 · 观众打赏 +10 元", 1100);
     showDanmaku("【观众】主播真勤快，打扫得真干净");
   }
@@ -2801,10 +2818,10 @@
       zone = "生的";
       mult = 0.5;
     } else if (state.heldCook <= 0.8) {
-      zone = "正好";
+      zone = "火候正好的";
       mult = 1.7;
     } else {
-      zone = "糊了";
+      zone = "烤糊的";
       mult = 0.15;
     }
     const eatMult = state.abilities.eat ? 1.5 : 1;
@@ -2820,11 +2837,14 @@
     if (idx >= 0) foods.splice(idx, 1);
     state.held = null;
     state.heldCook = 0;
-    showEvent("吃掉" + zone + "的" + f.type.name + " · 粉丝 +" + gain, 1400);
-    showDanmaku("主播吃了" + zone + "的" + f.type.name + "！");
+    if (mult >= 1.7) state.stats.eatenGood++;
+    else if (zone === "烤糊的") state.stats.eatenBurnt++;
+    else state.stats.eatenRaw++;
+    showEvent("吃掉" + zone + f.type.name + " · 粉丝 +" + gain, 1400);
+    showDanmaku("主播吃了" + zone + f.type.name + "！");
     // 观众跟着反应一句，比单纯报菜名像真的
     if (mult >= 1.7) showDanmaku("【观众】" + pick(DANMAKU.done));
-    else if (zone === "糊了") showDanmaku("【观众】" + pick(DANMAKU.burnt));
+    else if (zone === "烤糊的") showDanmaku("【观众】" + pick(DANMAKU.burnt));
     else showDanmaku("【观众】" + pick(DANMAKU.raw));
   }
 
@@ -2911,6 +2931,7 @@
     };
     anim();
     if (count) {
+      state.stats.watered += count;
       showEvent("灭了 " + count + " 处火", 900);
       showDanmaku(fires.length === 0 ? "【观众】好！全灭了" : "【观众】灭了 " + count + " 处，继续继续");
     }
@@ -3015,6 +3036,7 @@
         new CANNON.Vec3(0, -target.size.y * 0.3, 0)
       );
       state.legCooldown = 0.45;
+      state.stats.kicked++;
       showEvent("踹！", 500);
     }
   }
@@ -3143,6 +3165,8 @@
       if (d < TUNE.hurtRadius + (item.burn.radius || 0) * 0.3) burning++;
     }
     if (burning > 0 && state.interrupted <= 0) {
+      if (!state.inFireNow) { state.inFireNow = true; state.stats.steppedInFire++; }
+      state.burnSeconds += dt;
       const dmg = TUNE.fireDamagePerSec * burning * (state.abilities.resist ? 0.5 : 1) * dt;
       state.hp -= dmg;
       state.lastHurt = state.time;
@@ -3152,6 +3176,8 @@
         lastHurtFx = state.time;
         hurtFeedback(TUNE.fireDamagePerSec * burning * 0.45);
       }
+    } else {
+      state.inFireNow = false;
     }
 
     // 呼吸回血：离开火一段时间后慢慢恢复
@@ -3381,6 +3407,17 @@
     showDanmaku(text);
   }
 
+  /* 播一句观众说的话（自动加昵称 + 记进历史防复读） */
+  function sayChatLine(line) {
+    if (!line) return false;
+    const recent = state.chatHistory;
+    if (recent.indexOf(line) >= 0) return false;      // 刚说过就不重复
+    recent.push(line);
+    if (recent.length > 10) recent.shift();
+    showDanmaku(pick(CHAT_NAMES) + "：" + line);
+    return true;
+  }
+
   /* 从某个分类里挑一句没刚说过的 */
   function chatFrom(cat) {
     const pool = DANMAKU[cat];
@@ -3388,28 +3425,163 @@
     const recent = state.chatHistory;
     let line = pick(pool);
     for (let i = 0; i < 6 && recent.indexOf(line) >= 0 && recent.length < pool.length; i++) line = pick(pool);
-    state.chatHistory.push(line);
-    if (state.chatHistory.length > 10) state.chatHistory.shift();
-    showDanmaku(pick(CHAT_NAMES) + "：" + line);
-    return true;
+    return sayChatLine(line);
   }
 
-  /* 当前局面下，观众会聊什么 —— 返回 [{cat, w}] */
-  function danmakuWeights() {
-    const out = [];
-    const fireCount = fires.length;
-    const serious = fires.some(f => f.kind === "floor" || f.kind === "furniture");
-    const burning = fires.length > 0;
-    const sinceOut = state.time - state.fireOutAt;
+  /* ==================== 本地解说引擎 ==================== */
+  // 思路：游戏自己知道屏幕上正发生什么（谁在烧、烤到几分熟、血多少、地上几堆灰、
+  // 玩家刚干过什么），先把这些打包成"局面快照"，再找出其中最值得说的一件事，
+  // 套上人话模板输出成一条弹幕。不联网、不看像素，但不比看图差——它知道那箱子里是披萨还是鸡腿。
+  const NARRATE_COOLDOWN = 24;   // 同一件事 24 秒内不重复念叨
+
+  function narrationContext() {
     const held = state.held;
     const heldCook = held ? state.heldCook : 0;
-    const someBurnt = (held && heldCook > 0.8) || foods.some(f => f.cook > 0.8 && f.cook <= 1.2);
-    const someHot = (held && heldCook > 0.05 && heldCook <= 0.8) || foods.some(f => f.cook > 0.05 && f.cook <= 0.8);
-    const someReady = (held && heldCook >= 0.3 && heldCook <= 0.8) || foods.some(f => f.cook >= 0.3 && f.cook <= 0.8);
-    const rawFood = foods.filter(f => f.cook <= 0.05).length + (held && heldCook <= 0.05 ? 1 : 0);
+    const burntFoods = foods.filter(f => f.cook > 0.8 && f.cook <= 1.2);
+    const readyFoods = foods.filter(f => f.cook >= 0.3 && f.cook <= 0.8);
+    const furnFires = fires.filter(f => f.kind === "furniture");
+    return {
+      hp: state.hp,
+      money: state.money,
+      fans: Math.floor(state.fans),
+      heat: state.heat,
+      cumulativeHeat: state.cumulativeHeat,
+      fireCount: fires.length,
+      furnFires: furnFires.length,
+      burningFurn: furnFires.length ? (furnFires[0].label || "家具") : null,
+      floorFires: fires.filter(f => f.kind === "floor").length,
+      held: held,
+      heldType: held ? held.type.name : null,
+      heldCook: heldCook,
+      burntCount: burntFoods.length,
+      burntName: burntFoods.length ? burntFoods[0].type.name : null,
+      readyCount: readyFoods.length,
+      readyName: readyFoods.length ? readyFoods[0].type.name : null,
+      foodCount: foods.length,
+      ashCount: ashPiles.length,
+      flood: flood.level,
+      unopened: boxes.filter(b => !b.opened && !b.ash).length,
+      openedBoxes: boxes.filter(b => b.opened && !b.ash).length,
+      carried: !!state.carried,
+      water: state.water,
+      waterCap: state.abilities.water2 ? 2 : 1,
+      burnSeconds: state.burnSeconds,
+      timeSinceFireOut: state.fireOutAt >= 0 ? state.time - state.fireOutAt : Infinity,
+      fireActiveTime: state.fireActiveTime,
+      time: state.time,
+      stats: state.stats
+    };
+  }
 
-    if (state.hp < 35) out.push({ cat: "lowHp", w: 3 });
-    if (flood.level > 0.08) out.push({ cat: "flood", w: 3 });
+  /* 从当前局面里找"值得说的事"，每条都是一个可以直接播的短句 */
+  function narrationFacts(c) {
+    const out = [];
+    const S = c.stats;
+    const add = (key, w, text) => { if (text) out.push({ key, w, text }); };
+
+    // ---- 玩家自己 ----
+    if (c.hp <= 30) add("lowhp", 13, pick([
+      "血只剩 " + Math.round(c.hp) + " 了，兄弟你先撤",
+      Math.round(c.hp) + " 点血还在火边站着，我服",
+      "这血量我都不敢看了"
+    ]));
+    if (c.burnSeconds > 6) add("burning", 11, pick([
+      "你已经被烧了 " + Math.round(c.burnSeconds) + " 秒，皮肤是防弹的吗",
+      "一直站火里，这是在烤自己吗"
+    ]));
+    if (S.steppedInFire >= 2) add("stepfire", 7, "第 " + S.steppedInFire + " 次站火里了，你是不是故意的");
+
+    // ---- 钱 ----
+    if (c.money < 120) add("lowmoney", 9, pick([
+      "余额只剩 " + Math.round(c.money) + " 了，赔偿够买台新冰箱",
+      Math.round(c.money) + " 块，这直播是赔本做慈善"
+    ]));
+    else if (c.money >= 450) add("richmoney", 5, "余额 " + Math.round(c.money) + "，今晚播主发财了");
+
+    // ---- 火 ----
+    if (c.furnFires > 0 && c.burningFurn) add("furnfire", 12, pick([
+      c.burningFurn + "在烧！那个可不便宜",
+      "火到" + c.burningFurn + "了，已经收不住了"
+    ]));
+    if (c.floorFires >= 2) add("floorfire", 11, "地上 " + c.floorFires + " 处在烧，鞋底还好吗");
+    else if (c.floorFires === 1) add("floorfire1", 6, "地板着火了，这房子是租的吧");
+    if (c.fireCount >= 5) add("chaos", 13, pick([
+      c.fireCount + " 团火同时在烧，这已经不叫吃播了",
+      "数一下 " + c.fireCount + " 团火，我都不知道该看哪一团"
+    ]));
+    if (c.water === 0 && c.fireCount > 0 && c.stats.watered > 0) add("nowater", 7, "桶早就空了，先去水槽接水啊");
+
+    // ---- 食材 ----
+    if (c.held && c.heldCook > 0.85) add("heldburnt", 10, c.heldType + "已经糊透了，你还举着干嘛");
+    if (c.held && c.heldCook >= 0.3 && c.heldCook <= 0.8) add("heldready", 9, pick([
+      c.heldType + "这个火候正好，快吃",
+      "别举着了，再举就过火了"
+    ]));
+    if (c.burntCount > 0 && c.burntName) add("burntfloor", 6, "地上那块" + c.burntName + "已经可以当炭用了");
+    if (c.readyCount >= 2) add("ready2", 6, c.readyCount + " 份都烤好了，你打算先吃哪个");
+    if (S.eatenRaw >= 3) add("rawstreak", 10, "第 " + S.eatenRaw + " 块生的了，你是真不怕寄生虫");
+    if (S.eatenBurnt >= 2) add("burntstreak", 9, "吃了 " + S.eatenBurnt + " 份糊的，这牙口");
+    if (S.eatenGood >= 3) add("goodstreak", 6, "连吃 " + S.eatenGood + " 份火候刚好的，今天手很稳");
+
+    // ---- 现场 ----
+    if (c.ashCount >= 4) add("ash", 9, "地上 " + c.ashCount + " 堆灰了，等会儿别就着灰吃");
+    else if (c.ashCount > 0) add("ash1", 4, "地上有 " + c.ashCount + " 堆灰，扫帚就在旁边呢");
+    if (S.swept >= 2) add("swept", 5, "扫了 " + S.swept + " 次灰，这直播间的保洁比厨师上心");
+    if (S.burnedBoxes >= 3) add("burnedboxes", 9, "已经点了 " + S.burnedBoxes + " 个快递箱当柴火，粉丝寄的全让你造了");
+    if (S.kicked >= 3) add("kicked", 5, "第 " + S.kicked + " 脚了，这箱子跟你有什么仇");
+    if (c.unopened >= 3) add("pile", 6, c.unopened + " 个快递堆着没拆，手快点");
+    if (c.carried) add("carried", 4, "搬着箱子走来走去，像个搬家师傅");
+
+    // ---- 大场面 ----
+    if (c.flood > 0.1) add("flood", 10, "屋里水都到 " + Math.round(c.flood * 100) + "% 了，可以养鱼了");
+    if (c.cumulativeHeat >= TUNE.alarmHeat) add("alarm", 11, "邻居都报警了，再烧真有人上门");
+
+    // ---- 冷场 ----
+    if (c.fireCount === 0 && c.time > 60 && c.timeSinceFireOut > 40) add("quiet", 7, pick([
+      "一分多钟没点火了，我都困了",
+      "这直播安静得能听见我自己的肚子"
+    ]));
+
+    return out;
+  }
+
+  /* 挑一件最值得说的事 → 变成一句弹幕；没什么可说就返回 null（交给闲聊池） */
+  function pickNarration(force) {
+    const facts = narrationFacts(narrationContext());
+    const now = state.time;
+    const fresh = [];
+    for (const it of facts) {
+      const last = state.saidAt[it.key];
+      if (!force && last !== undefined && now - last < NARRATE_COOLDOWN) continue;
+      fresh.push(it);
+    }
+    if (!fresh.length) return null;
+    let total = 0;
+    for (const it of fresh) total += it.w;
+    let r = Math.random() * total;
+    let chosen = fresh[fresh.length - 1];
+    for (const it of fresh) {
+      r -= it.w;
+      if (r <= 0) { chosen = it; break; }
+    }
+    state.saidAt[chosen.key] = now;
+    return chosen.text;
+  }
+
+  /* 当前局面下，观众会聊什么（氛围层）—— 返回 [{cat, w}] */
+  function danmakuWeights() {
+    const out = [];
+    const c = narrationContext();
+    const sinceOut = c.timeSinceFireOut;
+    const burning = c.fireCount > 0;
+    const someBurnt = (c.held && c.heldCook > 0.8) || c.burntCount > 0;
+    const someHot = (c.held && c.heldCook > 0.05 && c.heldCook <= 0.8) ||
+      foods.some(f => f.cook > 0.05 && f.cook <= 0.8);
+    const someReady = (c.held && c.heldCook >= 0.3 && c.heldCook <= 0.8) || c.readyCount > 0;
+    const rawFood = foods.filter(f => f.cook <= 0.05).length + (c.held && c.heldCook <= 0.05 ? 1 : 0);
+
+    if (c.hp < 35) out.push({ cat: "lowHp", w: 3 });
+    if (c.flood > 0.08) out.push({ cat: "flood", w: 3 });
 
     if (!burning) {
       // 刚灭完火：先播两句"终于灭了"，再回到闲聊
@@ -3417,16 +3589,16 @@
       if (someBurnt) out.push({ cat: "burnt", w: 4 });
       else if (someReady) out.push({ cat: "done", w: 4 });
       else if (rawFood > 0) out.push({ cat: "raw", w: 1.5 });
-      if (ashPiles.length > 0) out.push({ cat: "ash", w: 1.5 });
+      if (c.ashCount > 0) out.push({ cat: "ash", w: 1.5 });
       out.push({ cat: "idle", w: 8 });
     } else {
       // 有火：按火势大小选语气
-      if (fireCount >= 3 || serious) out.push({ cat: "bigFire", w: 9 });
+      if (c.fireCount >= 3 || c.floorFires > 0 || c.furnFires > 0) out.push({ cat: "bigFire", w: 9 });
       else out.push({ cat: "fire", w: 6 });
       if (someHot) out.push({ cat: "cooking", w: 4 });
       if (someReady) out.push({ cat: "done", w: 2 });
       if (someBurnt) out.push({ cat: "burnt", w: 3 });
-      if (fireCount === 1 && !serious) out.push({ cat: "idle", w: 1.5 });   // 小火时也能聊点别的
+      if (c.fireCount === 1 && c.floorFires === 0 && c.furnFires === 0) out.push({ cat: "idle", w: 1.5 });
     }
     return out;
   }
@@ -3463,7 +3635,9 @@
       showDanmaku("【礼物】" + pick(CHAT_NAMES) + " 送出 " + pick(CHAT_GIFTS) + " ❤");
       state.money += 15;
     } else {
-      chatFrom(pickDanmakuCat());
+      // 六成概率先问解说引擎"现在有什么值得说的"，剩下四成留给闲聊，别变成全程播报
+      const said = Math.random() < 0.62 ? pickNarration() : null;
+      if (!said || !sayChatLine(said)) chatFrom(pickDanmakuCat());
     }
 
     // 观众"搞事情"：火在场时才可能发生，而且不会直接招来消防车
@@ -4237,6 +4411,13 @@
     state.fireOutAt = -99;
     state.lastFireCount = 0;
     state.chatHistory = [];
+    state.saidAt = {};
+    state.burnSeconds = 0;
+    state.inFireNow = false;
+    state.stats = {
+      kicked: 0, eatenRaw: 0, eatenGood: 0, eatenBurnt: 0,
+      burnedBoxes: 0, swept: 0, watered: 0, steppedInFire: 0, dropped: 0
+    };
     for (const k in danmakuGapAt) delete danmakuGapAt[k];
     danmakuTimer = 0;
     trollCooldown = 14;      // 开播先安静一会儿，别一上来就搞事
@@ -4355,6 +4536,12 @@
     DANMAKU_POOLS: DANMAKU,
     pickDanmakuCat: pickDanmakuCat,
     danmakuWeights: danmakuWeights,
+    narrationContext: narrationContext,
+    narrationFacts: narrationFacts,
+    pickNarration: pickNarration,
+    sayChatLine: sayChatLine,
+    stopBurning: stopBurning,
+    stopFloorFire: stopFloorFire,
     fireActiveTime: function () { return state.fireActiveTime; },
     chatHistory: function () { return state.chatHistory.slice(); },
     forceFirefighter: function () { state.reported = true; triggerFirefighter(); },
