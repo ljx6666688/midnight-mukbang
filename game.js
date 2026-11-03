@@ -3566,7 +3566,7 @@
     if (k === "q") dropHeld();
     if (k === "l") {
       if (document.pointerLockElement === canvas) releasePointerLock();
-      else canvas.requestPointerLock();
+      else tryPointerLock();
     }
     if (k === "e") {
       if (state.held) eatHeld();
@@ -3600,9 +3600,19 @@
   canvas.addEventListener("click", () => {
     if (IS_TOUCH) return;                     // 触屏用滑动转视角，不需要锁定指针
     if (state.running && state.interrupted <= 0 && document.pointerLockElement !== canvas) {
-      canvas.requestPointerLock();
+      tryPointerLock();
     }
   });
+
+  // 请求指针锁定：无用户手势、被浏览器策略拒绝等情况会抛错或返回 rejected promise，
+  // 统一吞掉，避免控制台噪音（锁不上的时候点一下画面就行）
+  function tryPointerLock() {
+    if (IS_TOUCH || !canvas.requestPointerLock) return;
+    try {
+      const r = canvas.requestPointerLock();
+      if (r && typeof r.catch === "function") r.catch(() => {});
+    } catch (e) { /* 浏览器拒绝，忽略 */ }
+  }
 
   // 失去焦点/切标签页/看别的窗口 → 主动释放鼠标锁定，避免鼠标被"困"在游戏窗口里
   function releasePointerLock() {
@@ -3938,7 +3948,7 @@
     setTool("knife");
     checkAbilities();
     showEvent("开播！", 1200);
-    if (!IS_TOUCH && canvas.requestPointerLock) canvas.requestPointerLock();   // 触屏不需要指针锁定
+    tryPointerLock();   // 触屏不需要指针锁定
   }
 
   document.getElementById("startBtn").onclick = restart;
