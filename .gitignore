@@ -1,0 +1,17 @@
+﻿# 依赖与构建产物
+node_modules/
+dist/
+
+# 截图与临时文件
+*.png
+!docs/screenshot.png
+_*.mjs
+!tests/**
+_probe*.mjs
+*.log
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
