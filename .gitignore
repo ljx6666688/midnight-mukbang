@@ -8,6 +8,7 @@ dist/
 _*.mjs
 !tests/**
 _probe*.mjs
+!tests/_probe*.mjs
 *.log
 
 # 编辑器
